@@ -46,7 +46,7 @@ cp -a ${formula_root}/pillar_examples data/srv/salt/pillar/${formula_subject}
 
 pillar_examples=$(find data/srv/salt/pillar/${formula_subject} -type f -name '*.sls')
 
-for asset_dir in ${formula_root}/test/docker/docker-assets/assets/*; do
+for asset_dir in ${formula_root}/test/docker-assets/assets/*; do
   name=${asset_dir##*/}
   if [[ -d ${asset_dir}/states ]]; then
     cp -a ${asset_dir}/states data/srv/salt/states/${name}
