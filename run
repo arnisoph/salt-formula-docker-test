@@ -1,0 +1,113 @@
+#!/bin/bash -xe
+
+# Arguments
+
+formula_root=$1
+formula_subject=$2
+
+if [[ -z $formula_root ]]; then
+  echo "You forgot to define the root folder of the formula: \`${0} myformulas/saltstack-foo-formula/ foo'"
+  exit 1
+fi
+
+if [[ -z $formula_subject ]]; then
+  echo "You forgot to define the subject of the formula (mostly the name of the software that is beeing managed): \`${0} myformulas/saltstack-foo-formula/ foo'"
+  exit 1
+fi
+
+# Functions
+
+pushd () {
+  command pushd "$@" > /dev/null
+}
+
+popd () {
+  command popd "$@" > /dev/null
+}
+
+# Main
+
+pushd ${formula_root}
+formula_root=${PWD}
+
+echo "Preparing data tree"
+tempdir=$(mktemp -d /tmp/saltstack_${formula_subject}_formula_test_docker_common.XXXXXX)
+
+pushd ${tempdir}
+
+mkdir -p data/etc/salt/
+mkdir -p data/srv/salt/{contrib,pillar,states,_grains,_modules,_states}
+mkdir -p data/srv/salt/contrib/{reactor,states}
+mkdir -p tmp/
+
+[[ -d ${formula_root}/contrib/states ]] && cp -a ${formula_root}/contrib/states data/srv/salt/contrib/states/${formula_subject}
+cp -a ${formula_root}/states data/srv/salt/states/${formula_subject}
+cp -a ${formula_root}/pillar_examples data/srv/salt/pillar/${formula_subject}
+
+pillar_examples=$(find data/srv/salt/pillar/${formula_subject} -type f -name '*.sls')
+
+for asset_dir in ${formula_root}/test/docker/docker-assets/assets/*; do
+  name=${asset_dir##*/}
+  if [[ -d ${asset_dir}/states ]]; then
+    cp -a ${asset_dir}/states data/srv/salt/states/${name}
+  elif [[ -d ${asset_dir}/${name} ]]; then
+    cp -a ${asset_dir}/${name} data/srv/salt/states/${name}
+  fi
+
+  [[ -d ${asset_dir}/contrib/states ]] && cp -a ${asset_dir}/contrib/states data/srv/salt/contrib/states/${name}
+
+  for asset_modsdir in _grains _modules _states; do
+    [[ -d ${asset_dir}/${asset_modsdir} ]] && find ${asset_dir}/${asset_modsdir} -type f -name '*.py' -exec cp {} data/srv/salt/${asset_modsdir} \;
+  done
+done
+
+
+#cp ${formula_root}/test/docker/minion data/etc/salt/
+cat <<EOF > data/etc/salt/minion
+file_roots:
+  base:
+    - /srv/salt/states
+    - /srv/salt/contrib/states
+
+pillar_roots:
+  base:
+    - /srv/salt/pillar
+
+module_dirs:
+  - /srv/salt/_modules
+
+states_dirs:
+  - /srv/salt/_states
+
+file_client: local
+EOF
+
+cp ${formula_root}/test/docker/test_common/Dockerfile .
+
+[[ -z "$TEST_SLS" ]] && export TEST_SLS=${formula_subject}
+
+for var in TEST_OS TEST_SALTVERSION TEST_SLS; do
+  ed -s Dockerfile <<< $',s/{{ '${var}$' }}/'${!var}$'/g\nw'
+done
+
+[[ -n $(which tree 2>/dev/null) ]] && tree
+
+echo "Running Docker.."
+
+for p in ${pillar_examples[@]}; do
+  pillar_name=${p%*.sls}
+  pillar_name=${pillar_name##*/}
+
+  cat <<EOF > data/srv/salt/pillar/top.sls
+base:
+  '*':
+    - ${formula_subject}.${pillar_name}
+EOF
+
+  time docker build --no-cache=true --rm=true -t saltstack_${formula_subject}_formula_${pillar_name} .
+done
+
+
+
+# Cleanup
+#rm -rf ${tempdir}
